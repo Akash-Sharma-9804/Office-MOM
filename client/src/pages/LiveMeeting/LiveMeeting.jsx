@@ -57,6 +57,8 @@ const LiveMeeting = () => {
   const [detectLanguage, setDetectLanguage] = useState("");
   const [audioID, setAudioID] = useState(null);
   const [requests, setRequests] = useState([]);
+  const [uploadedUserId, setUploadedUserId] = useState(null);
+  const [historyID, setHistoryID] = useState(null);
   const timerRef = useRef(null);
   const localMicRef = useRef(null);
   const socketRef = useRef(null);
@@ -318,7 +320,7 @@ const LiveMeeting = () => {
         });
 
         const formData = new FormData();
-        formData.append("recordedAudio", file);
+        formData.append("audio", file);
         formData.append("source", "Live Transcript Conversion");
 
         const response = await axios.post(
@@ -332,10 +334,14 @@ const LiveMeeting = () => {
           }
         );
 
-        if (response.data && response.data.audioUrl) {
-          const { audioUrl, id, uploadedAt, title, audioId } = response.data;
+        if (response.data) {
+          const { audioUrl, id, uploadedAt, title, audioId, transcription, language, transcriptAudioId, userId } = response.data;
           setAudioID(audioId);
-          setUpdatedMeetingId(id);
+          setUpdatedMeetingId(transcriptAudioId);
+          setUploadedUserId(userId);
+          setHistoryID(id);
+          setFinalTranscript(transcription || "");
+          setDetectLanguage(language);
           dispatch(
             addAudioPreview({
               audioUrl,
@@ -346,6 +352,7 @@ const LiveMeeting = () => {
               needToShow: true,
             })
           );
+          addToast("success", "Audio processed successfully!");
         } else {
           addToast("error", "Upload failed or audioUrl missing");
         }
@@ -495,23 +502,44 @@ const LiveMeeting = () => {
     }
     setIsProcessing(true);
     try {
+      const file = new File([recordingBlobRef.current], `recording_${Date.now()}.mp3`, {
+        type: "audio/mpeg",
+      });
+
       const formData = new FormData();
-      formData.append("mixed", recordingBlobRef.current, "mixed.webm");
-      const res = await axios.post(
-        `${import.meta.env.VITE_BACKEND_URL}/api/live-meeting/${meetingId}/recording`,
+      formData.append("audio", file);
+      formData.append("source", "Live Transcript Conversion");
+
+      const response = await axios.post(
+        `${import.meta.env.VITE_BACKEND_URL}/api/upload/upload-audio`,
         formData,
         {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "multipart/form-data",
+          },
         }
       );
-      setShowModal(true);
-      setFinalTranscript(res.data.text || "");
-      setDetectLanguage(res.data.language);
-      setRecordedBlob(false);
-      setIsProcessing(false);
+
+      if (response.data) {
+        const { audioUrl, id, uploadedAt, title, audioId, transcription, language, transcriptAudioId, userId } = response.data;
+        setAudioID(audioId);
+        setUpdatedMeetingId(transcriptAudioId);
+        setUploadedUserId(userId);
+        setHistoryID(id);
+        setFinalTranscript(transcription || "");
+        setDetectLanguage(language);
+        setShowModal(true);
+        setRecordedBlob(false);
+        addToast("success", "Audio processed successfully!");
+      } else {
+        addToast("error", "Upload failed or audioUrl missing");
+      }
     } catch (error) {
       addToast("error", "Failed to process file. Please try again.");
       console.error("Error processing notes:", error);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -519,14 +547,19 @@ const LiveMeeting = () => {
 
   const HandleSaveTable = async (data, downloadOptions) => {
     saveTranscriptFiles(data, addToast, downloadOptions, email, fullName);
+
+    // 🕒 Get user's local time and convert to UTC
+    const localDate = new Date();
+    const utcDate = localDate.toISOString().slice(0, 19).replace("T", " "); // e.g. 2025-10-21 09:12:34
+
     const historyData = {
       source: "Live Transcript Conversion",
+      date: utcDate, // send UTC time to backend
       data: data,
-      title: historyTitle,
       language: detectLanguage,
       audio_id: audioID,
     };
-    await addHistory(token, historyData, addToast, updatedMeetingId);
+    
     setShowModal2(false);
     setShowModal(false);
   };
@@ -599,22 +632,26 @@ const LiveMeeting = () => {
     try {
       const tableData = await processTranscriptWithDeepSeek(
         finalTranscript,
-        headers
+        headers,
+        audioID,
+        uploadedUserId,
+        updatedMeetingId,
+        detectLanguage,
+        historyID
       );
-      if (!Array.isArray(tableData)) {
+      console.log("Table data received:", tableData); // Debug log
+      if (!Array.isArray(tableData.final_mom)) {
         addToast("error", "Could not process meeting notes");
         return;
       }
-      setShowFullData(tableData);
-      setShowModal2(true);
+      setShowFullData(tableData.final_mom);
       setIsSending(false);
+      setShowModal2(true);
     } catch (error) {
       console.error("Error converting transcript:", error);
       addToast("error", "Failed to convert transcript");
       setShowModal2(false);
       setShowModal(false);
-    } finally {
-      setIsProcessing(false);
     }
   };
   const handleDelete = async (audioId) => {
@@ -647,19 +684,37 @@ const LiveMeeting = () => {
     setIsPreviewProcessing(true);
     try {
       const formData = new FormData();
-      formData.append("audioUrl", audioFile);
-      const res = await axios.post(
-        `${import.meta.env.VITE_BACKEND_URL}/api/live-meeting/upload-audio-from-url`,
+      formData.append("audio", audioFile);
+      formData.append("source", "Live Transcript Conversion");
+
+      const response = await axios.post(
+        `${import.meta.env.VITE_BACKEND_URL}/api/upload/upload-audio`,
         formData,
-        { headers: { Authorization: `Bearer ${token}` } }
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "multipart/form-data",
+          },
+        }
       );
-      setShowModal(true);
-      setFinalTranscript(res.data.text || "");
-      setRecordedBlob(false);
-      setIsPreviewProcessing(false);
+
+      if (response.data) {
+        const { audioUrl, id, uploadedAt, title, audioId, transcription, language, transcriptAudioId, userId } = response.data;
+        setAudioID(audioId);
+        setUpdatedMeetingId(transcriptAudioId);
+        setUploadedUserId(userId);
+        setHistoryID(id);
+        setFinalTranscript(transcription || "");
+        setDetectLanguage(language);
+        setShowModal(true);
+        setRecordedBlob(false);
+        addToast("success", "Audio processed successfully!");
+      } else {
+        addToast("error", "Upload failed or audioUrl missing");
+      }
     } catch (err) {
       console.error("Error uploading or processing audio:", err);
-      setIsPreviewProcessing(false);
+      addToast("error", "Failed to process audio file");
     } finally {
       setIsPreviewProcessing(false);
     }
@@ -673,8 +728,8 @@ const LiveMeeting = () => {
   return (
     <>
       <Helmet>
-        <meta charSet="utf-8" />
-        <title>OfficeMom | LiveMeeting</title>
+        <meta charSet="utf-8" name="robots" content="noindex, nofollow"/>
+        <title>Smart Minutes of the Meeting (OfficeMoM) | LiveMeeting</title>
         <link rel="canonical" href="https://officemom.me/live-meeting" />
       </Helmet>
       <section className="relative min-h-screen w-full overflow-hidden">
@@ -692,7 +747,7 @@ const LiveMeeting = () => {
             <div className="absolute inset-0 bg-[linear-gradient(rgba(0,0,0,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.1)_1px,transparent_1px)] bg-[size:64px_64px] [mask-image:radial-gradient(ellipse_80%_50%_at_50%_50%,black_40%,transparent_100%)]"></div>
           </div>
         </div>
-        <div className="relative z-20 max-h-screen overflow-hidden overflow-y-scroll ">
+        <div className="relative z-20 max-h-screen overflow-hidden overflow-y-scroll pb-10">
           <div className=" min-h-screen">
             {!showModal && (
                 <Breadcrumb items={breadcrumbItems} />
@@ -878,9 +933,9 @@ const LiveMeeting = () => {
                       </>
                     )}
                   </button>
-                  <p className="text-xs text-gray-400 mt-3 text-center">
+                  {/* <p className="text-xs text-gray-400 mt-3 text-center">
                     🆓 Meeting transcription is completely free now
-                  </p>
+                  </p> */}
 
                   <MultipleAudioPlayer
                     onContinue={continueNextProcess}

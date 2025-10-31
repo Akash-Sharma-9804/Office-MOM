@@ -20,6 +20,7 @@ import Breadcrumb from "../../components/LittleComponent/Breadcrumb";
 const breadcrumbItems = [{ label: "Generate Notes" }];
 
 const GenerateNotes = () => {
+  const { email, fullName, token } = useSelector((state) => state.auth);
   const [activeTab, setActiveTab] = useState("computer");
   const [selectedFile, setSelectedFile] = useState(null);
   const [driveUrl, setDriveUrl] = useState("");
@@ -33,6 +34,9 @@ const GenerateNotes = () => {
   const [isSending, setIsSending] = useState(false);
   const [audioID, setAudioID] = useState(null);
   const [audioURL, setAudioURL] = useState(null);
+  const [updatedMeetingId, setUpdatedMeetingId] = useState(null);
+  const [uploadedUserId, setUploadedUserId] = useState(null);
+  const [historyID, setHistoryID] = useState(null);
 
   const fileInputRef = useRef(null);
   const { addToast } = useToast();
@@ -51,133 +55,213 @@ const GenerateNotes = () => {
         setError("Invalid file type. Please upload an audio or video file.");
         return;
       }
-      if (file.size > 10.74 * 1024 * 1024 * 1024) {
-        setError("File size exceeds maximum limit of 10.74GB");
-        return;
-      }
-      setSelectedFile(file);
-      setError(null);
+      if (file.size > 2 * 1024 * 1024 * 1024) {
+  setError("File size exceeds maximum limit of 2GB");
+  return;
+}
+setSelectedFile(file);
+setError(null);
+
     }
   };
 
-  const handleStartMakingNotes = async () => {
-    if (activeTab === "computer" && !selectedFile) {
-      return;
-    }
-    if (activeTab === "drive" && !driveUrl) {
-      setError("Please paste a valid Google Drive URL");
-      return;
-    }
-    setIsProcessing(true);
+  // const handleStartMakingNotes = async () => {
+  //   if (activeTab === "computer" && !selectedFile) {
+  //     return;
+  //   }
+  //   if (activeTab === "drive" && !driveUrl) {
+  //     setError("Please paste a valid Google Drive URL");
+  //     return;
+  //   }
+  //   setIsProcessing(true);
 
-    const formData = new FormData();
-    let apiUrl = "";
+  //   const formData = new FormData();
+  //   let apiUrl = "";
+
+  //   if (activeTab === "computer") {
+  //     formData.append("recordedAudio", selectedFile);
+  //     formData.append("source", "Generate Notes Conversion");
+  //     apiUrl = `${import.meta.env.VITE_BACKEND_URL}/api/upload/upload-audio`;
+  //   } else {
+  //     formData.append("driveUrl", driveUrl);
+  //     apiUrl = `${import.meta.env.VITE_BACKEND_URL}/api/process-drive`;
+  //   }
+
+  //   try {
+  //     const resp = await axios.post(apiUrl, formData, {
+  //       headers: {
+  //         Authorization: `Bearer ${token}`,
+  //         "Content-Type": "multipart/form-data",
+  //       },
+  //     });
+
+  //     if (resp.statusText !== "OK") {
+  //       throw new Error(`Server error: ${resp.status}`);
+  //     }
+
+  //     const data = await resp?.data;
+  //     setAudioURL(data.audioUrl);
+  //     setAudioID(data.audioId);
+  //     setDetectLanguage(data.language);
+  //     setFinalTranscript(data.transcription || "");
+  //     setHistoryID(data?.id);
+  //     setUpdatedMeetingId(data?.transcriptAudioId);
+  //     setUploadedUserId(data?.userId);
+  //     setShowModal(true);
+  //     setSelectedFile(null);
+  //     setDriveUrl("");
+  //     if (fileInputRef.current) {
+  //       fileInputRef.current.value = "";
+  //     }
+  //   } catch (err) {
+  //     console.error(err);
+  //     addToast("error", "Failed to process file. Please try again.");
+  //   } finally {
+  //     setIsProcessing(false);
+  //   }
+  // };
+
+  const handleStartMakingNotes = async () => {
+  if (activeTab === "computer" && !selectedFile) {
+    return;
+  }
+  if (activeTab === "drive" && !driveUrl) {
+    setError("Please paste a valid Google Drive URL");
+    return;
+  }
+  setIsProcessing(true);
+
+  // 🔥 Single API endpoint for both file upload and Google Drive
+  const apiUrl = `${import.meta.env.VITE_BACKEND_URL}/api/upload/upload-audio`;
+
+  try {
+    let response;
 
     if (activeTab === "computer") {
-      formData.append("audio", selectedFile);
-      apiUrl = `${import.meta.env.VITE_BACKEND_URL}/api/process-audio/upload`;
-    } else {
-      formData.append("driveUrl", driveUrl);
-      apiUrl = `${import.meta.env.VITE_BACKEND_URL}/api/process-drive`;
-    }
+      // 📁 File Upload - use FormData
+      const formData = new FormData();
+      formData.append("audio", selectedFile); // Changed from "recordedAudio" to "audio"
+      formData.append("source", "Generate Notes Conversion");
 
-    try {
-      const resp = await axios.post(apiUrl, formData, {
+      response = await axios.post(apiUrl, formData, {
         headers: {
+          Authorization: `Bearer ${token}`,
           "Content-Type": "multipart/form-data",
         },
       });
-
-      if (resp.statusText !== "OK") {
-        throw new Error(`Server error: ${resp.status}`);
-      }
-
-      const data = await resp?.data;
-      setAudioURL(data.audioUrl);
-      setAudioID(data.audio_id);
-      setDetectLanguage(data.language);
-      setFinalTranscript(data.text);
-      setShowModal(true);
-      setSelectedFile(null);
-      setDriveUrl("");
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-    } catch (err) {
-      console.error(err);
-      addToast("error", "Failed to process file. Please try again.");
-    } finally {
-      setIsProcessing(false);
+    } else {
+      // 🔗 Google Drive URL - use JSON
+      response = await axios.post(
+        apiUrl,
+        {
+          driveUrl: driveUrl,
+          source: "google_drive",
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
     }
-  };
 
-  const { email, fullName, token } = useSelector((state) => state.auth);
-  const handleSaveHeaders = async (headers) => {
+    if (response.status !== 200) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+
+    const data = response.data;
+    
+    // ✅ Set all the state values
+    setAudioURL(data.audioUrl);
+    setAudioID(data.audioId);
+    setDetectLanguage(data.language);
+    setFinalTranscript(data.transcription || "");
+    setHistoryID(data.id);
+    setUpdatedMeetingId(data.transcriptAudioId);
+    setUploadedUserId(data.userId);
+    setShowModal(true);
+    
+    // 🧹 Clear inputs
+    setSelectedFile(null);
+    setDriveUrl("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+
+    // Optional: Show success message
+    addToast("success", data.message || "Audio processed successfully!");
+
+  } catch (err) {
+    console.error("Processing error:", err);
+    const errorMessage = err.response?.data?.message || err.message || "Failed to process file. Please try again.";
+    addToast("error", errorMessage);
+  } finally {
+    setIsProcessing(false);
+  }
+};
+
+  const handleSaveHeaders = async (
+    headers,
+    audioIdFromUpload,
+    transcriptAudioIdFromUpload,
+    userIdFromUpload
+  ) => {
     setIsSending(true);
     try {
       const tableData = await processTranscriptWithDeepSeek(
         finalTranscript,
-        headers
+        headers,
+        audioIdFromUpload,
+        userIdFromUpload,
+        transcriptAudioIdFromUpload,
+        detectLanguage,
+        historyID
       );
-
-      if (!Array.isArray(tableData)) {
+      console.log("Table data received:", tableData); // Debug log
+      if (!Array.isArray(tableData.final_mom)) {
         addToast("error", "Could not process meeting notes");
         return;
       }
-      setShowFullData(tableData);
-      setShowModal2(true);
+
+      setShowFullData(tableData.final_mom);
       setIsSending(false);
+      setShowModal2(true);
     } catch (error) {
       console.error("Error converting transcript:", error);
       addToast("error", "Failed to convert transcript");
       setShowModal2(false);
       setShowModal(false);
-    } finally {
-      setIsProcessing(false);
     }
   };
 
-  const HandleSaveTable = async (data, downloadOptions) => {
-    saveTranscriptFiles(data, addToast, downloadOptions, email, fullName);
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    const hours = String(now.getHours()).padStart(2, "0");
-    const minutes = String(now.getMinutes()).padStart(2, "0");
-    const seconds = String(now.getSeconds()).padStart(2, "0");
-    const dateCreated = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+ const HandleSaveTable = async (data, downloadOptions) => {
+  saveTranscriptFiles(data, addToast, downloadOptions, email, fullName);
 
-    const historyData = {
-      source: "Generate Notes Conversion",
-      date: dateCreated,
-      data: data,
-      language: detectLanguage,
-      audio_id: audioID,
-    };
-    await addHistory(token, historyData, addToast);
-    setShowModal2(false);
-    setShowModal(false);
+  // 🕒 Get user's local time and convert to UTC
+  const localDate = new Date();
+  const utcDate = localDate.toISOString().slice(0, 19).replace("T", " "); // e.g. 2025-10-21 09:12:34
+
+  const historyData = {
+    source: "Generate Notes Conversion",
+    date: utcDate, // send UTC time to backend
+    data: data,
+    language: detectLanguage,
+    audio_id: audioID,
   };
-  const addHistory = async (token, historyData, addToast) => {
-    try {
-      await axios.post(
-        `${import.meta.env.VITE_BACKEND_URL}/api/history`,
-        historyData,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      
-    } catch (err) {
-      console.error("Add history error:", err);
-      addToast("error", "Failed to add history");
-    }
-  };
+
+  
+  setShowModal2(false);
+  setShowModal(false);
+};
+
+  
 
   return (
     <>
       <Helmet>
-        <meta charSet="utf-8" />
-        <title>OfficeMom | GenerateNotes</title>
+        <meta charSet="utf-8" name="robots" content="noindex, nofollow"/>
+        <title>Smart Minutes of the Meeting (OfficeMoM) | GenerateNotes</title>
         <link rel="canonical" href="https://officemom.me/audio-notes" />
       </Helmet>
       <section className="relative min-h-screen w-full overflow-hidden">
@@ -195,7 +279,7 @@ const GenerateNotes = () => {
             <div className="absolute inset-0 bg-[linear-gradient(rgba(0,0,0,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.1)_1px,transparent_1px)] bg-[size:64px_64px] [mask-image:radial-gradient(ellipse_80%_50%_at_50%_50%,black_40%,transparent_100%)]"></div>
           </div>
         </div>
-        <div className="relative z-20 max-h-screen overflow-hidden overflow-y-scroll ">
+        <div className="relative z-20 max-h-screen overflow-hidden overflow-y-scroll pb-10">
           <div className=" min-h-screen">
             {!showModal && <Breadcrumb items={breadcrumbItems} />}
             {!showModal && (
@@ -216,7 +300,14 @@ const GenerateNotes = () => {
                   />
                 ) : (
                   <TablePreview
-                    onSaveHeaders={(headers) => handleSaveHeaders(headers)}
+                    onSaveHeaders={(headers) =>
+                      handleSaveHeaders(
+                        headers,
+                        audioID, // audio_id from upload
+                        updatedMeetingId, // transcript_audio_id
+                        uploadedUserId  // userId from upload
+                      )
+                    }
                     isSending={isSending}
                   />
                 )}
@@ -326,7 +417,7 @@ const GenerateNotes = () => {
                                 Supported: MP3, WAV, MP4, WebM
                               </p>
                               <p className="text-xs text-gray-400">
-                                Max size: 10.74GB
+                                Max size: 2 GB
                               </p>
                             </>
                           )}
@@ -356,7 +447,7 @@ const GenerateNotes = () => {
                             }}
                           />
                           <p className="text-xs text-gray-400 mt-2 self-end">
-                            Max size: 10.74GB
+                            Max size: 2 GB
                           </p>
                         </div>
                       )}
@@ -449,9 +540,9 @@ const GenerateNotes = () => {
                         )}
                       </button>
                     )}
-                    <p className="text-xs text-gray-400 mt-3 text-center">
+                    {/* <p className="text-xs text-gray-400 mt-3 text-center">
                       🆓 Meeting transcription is completely free now
-                    </p>
+                    </p> */}
                   </div>
                 </section>
                 <section className="lg:w-[35%] w-screen lg:pr-6 px-4 md:px-10 lg:px-0">

@@ -25,6 +25,7 @@ const transporter = nodemailer.createTransport({
 });
 
 const signup = async (req, res) => {
+  const connection = await db.getConnection(); // get a connection from the pool
   try {
     const { error } = signupSchema.validate(req.body, { abortEarly: false });
     if (error) {
@@ -35,75 +36,80 @@ const signup = async (req, res) => {
     }
 
     const { fullName, email, password } = req.body;
-    const [existingUser] = await db.query(
+
+    await connection.beginTransaction();
+
+    const [existingUser] = await connection.query(
       "SELECT id FROM users WHERE email = ?",
       [email]
     );
     if (existingUser.length > 0) {
+      await connection.rollback();
       return res.status(400).json({ message: "Email already registered" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const otp = crypto.randomInt(100000, 1000000);
 
-    await db.query(
+    const [result] = await connection.query(
       "INSERT INTO users (fullName, email, password, otp, isVerified) VALUES (?, ?, ?, ?, ?)",
       [fullName, email, hashedPassword, otp, false]
     );
 
+    const userId = result.insertId;
+
+    await connection.execute(
+      `INSERT INTO user_subscription_details 
+        (user_id, stripe_payment_id, total_minutes, total_remaining_time, total_used_time, monthly_limit, monthly_used, monthly_remaining) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, null, 300, 300, 0, 0, 0, 0]
+    );
+
+    // Try sending OTP email
     await transporter.sendMail({
       from: `"OfficeMoM" <${process.env.MAIL_USER_NOREPLY_VIEW}>`,
       to: email,
       replyTo: process.env.MAIL_USER_NOREPLY_VIEW,
       subject: "Verify your email - OfficeMoM",
       html: `
-  <!DOCTYPE html>
-  <html>
-  <head>
-    <meta charset="UTF-8" />
-    <title>Email Verification</title>
-  </head>
-  <body style="margin:0; padding:0; font-family: Arial, sans-serif; background-color:#f5f5f5;">
-    <table align="center" cellpadding="0" cellspacing="0" width="100%" style="padding:20px 0;">
-      <tr>
-        <td align="center">
-          <table cellpadding="0" cellspacing="0" width="600" style="background:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 0 10px rgba(0,0,0,0.1);">
-            <tr>
-              <td style="background-color:#4a90e2; color:#ffffff; padding:20px; text-align:center; font-size:24px; font-weight:bold;">
-                OfficeMoM Email Verification
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:30px; color:#333333; font-size:16px; line-height:1.5;">
-                <p>Hello,</p>
-                <p>Thank you for signing up with <b>OfficeMoM</b>. To complete your registration, please verify your email address using the OTP below:</p>
-                <p style="text-align:center; margin:30px 0;">
-                  <span style="display:inline-block; padding:15px 30px; font-size:22px; font-weight:bold; color:#ffffff; background-color:#4a90e2; border-radius:6px;">
-                    ${otp}
-                  </span>
-                </p>
-                <p>This OTP is valid for <b>10 minutes</b>. If you didn’t request this, you can safely ignore this email.</p>
-                <p style="margin-top:30px;">Best regards,<br/>The OfficeMoM Team</p>
-              </td>
-            </tr>
-            <tr>
-              <td style="background:#f0f0f0; padding:15px; text-align:center; font-size:12px; color:#777777;">
-                &copy; ${new Date().getFullYear()} OfficeMoM. All rights reserved.
-              </td>
-            </tr>
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8" /><title>Email Verification</title></head>
+        <body style="margin:0; padding:0; font-family: Arial, sans-serif; background-color:#f5f5f5;">
+          <table align="center" cellpadding="0" cellspacing="0" width="100%" style="padding:20px 0;">
+            <tr><td align="center">
+              <table cellpadding="0" cellspacing="0" width="600" style="background:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 0 10px rgba(0,0,0,0.1);">
+                <tr><td style="background-color:#4a90e2; color:#ffffff; padding:20px; text-align:center; font-size:24px; font-weight:bold;">
+                  OfficeMoM Email Verification
+                </td></tr>
+                <tr><td style="padding:30px; color:#333333; font-size:16px; line-height:1.5;">
+                  <p>Hello,</p>
+                  <p>Thank you for signing up with <b>OfficeMoM</b>. Please verify your email using this OTP:</p>
+                  <p style="text-align:center; margin:30px 0;">
+                    <span style="display:inline-block; padding:15px 30px; font-size:22px; font-weight:bold; color:#ffffff; background-color:#4a90e2; border-radius:6px;">${otp}</span>
+                  </p>
+                  <p>This OTP is valid for <b>10 minutes</b>.</p>
+                  <p style="margin-top:30px;">Best regards,<br/>The OfficeMoM Team</p>
+                </td></tr>
+                <tr><td style="background:#f0f0f0; padding:15px; text-align:center; font-size:12px; color:#777777;">
+                  &copy; ${new Date().getFullYear()} OfficeMoM. All rights reserved.
+                </td></tr>
+              </table>
+            </td></tr>
           </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-  </html>
-  `,
+        </body>
+        </html>`,
     });
+
+    await connection.commit();
 
     res.status(201).json({ message: "OTP sent to email", email });
   } catch (err) {
-    console.error("Signup error:", err);
-    res.status(500).json({ message: "Server error" });
+    if (connection) await connection.rollback();
+    console.error("❌ Signup error:", err);
+    res.status(500).json({ message: "Server error during signup" });
+  } finally {
+    if (connection) connection.release();
   }
 };
 
@@ -120,6 +126,7 @@ const login = async (req, res) => {
     const [user] = await db.query("SELECT * FROM users WHERE email = ?", [
       email,
     ]);
+
     if (user.length === 0) {
       return res.status(400).json({ message: "Invalid email or password" });
     }
@@ -133,6 +140,18 @@ const login = async (req, res) => {
       { expiresIn: "1d" }
     );
 
+    const [subscription] = await db.query(
+      "SELECT * FROM user_subscription_details WHERE user_id = ?",
+      [user[0].id]
+    );
+
+    const [momCount] = await db.query(
+      "SELECT COUNT(*) AS totalCreatedMoMs FROM history WHERE user_id = ?",
+      [user[0].id]
+    );
+
+    const totalCreatedMoMs = momCount[0]?.totalCreatedMoMs || 0;
+
     res.status(200).json({
       message: "Login successful",
       token,
@@ -141,6 +160,9 @@ const login = async (req, res) => {
         fullName: user[0].fullName,
         email: user[0].email,
         profilePic: user[0].profilePic,
+        totalTimes: subscription[0].total_minutes,
+        totalRemainingTime: subscription[0].total_remaining_time,
+        totalCreatedMoMs: totalCreatedMoMs,
       },
     });
   } catch (err) {
@@ -195,8 +217,35 @@ const resendOtp = async (req, res) => {
       to: email,
       subject: "Resend OTP",
       replyTo: process.env.MAIL_USER_NOREPLY_VIEW,
-      text: `Your new OTP is ${otp}`,
-      html: `<p>Your new OTP is <b>${otp}</b></p>`,
+      subject: "Resend OTP - OfficeMoM",
+      html: `
+      <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8" /><title>Resend OTP</title></head>
+        <body style="margin:0; padding:0; font-family: Arial, sans-serif; background-color:#f5f5f5;">
+          <table align="center" cellpadding="0" cellspacing="0" width="100%" style="padding:20px 0;">
+            <tr><td align="center">
+              <table cellpadding="0" cellspacing="0" width="600" style="background:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 0 10px rgba(0,0,0,0.1);">
+                <tr><td style="background-color:#4a90e2; color:#ffffff; padding:20px; text-align:center; font-size:24px; font-weight:bold;">
+                  OfficeMoM Resend OTP
+                </td></tr>
+                <tr><td style="padding:30px; color:#333333; font-size:16px; line-height:1.5;">
+                  <p>Hello,</p>
+                  <p>Your new OTP is:</p>
+                  <p style="text-align:center; margin:30px 0;">
+                    <span style="display:inline-block; padding:15px 30px; font-size:22px; font-weight:bold; color:#ffffff; background-color:#4a90e2; border-radius:6px;">${otp}</span>
+                  </p>
+                  <p>This OTP is valid for <b>10 minutes</b>.</p>
+                  <p style="margin-top:30px;">Best regards,<br/>The OfficeMoM Team</p>
+                </td></tr>
+                <tr><td style="background:#f0f0f0; padding:15px; text-align:center; font-size:12px; color:#777777;">
+                  &copy; ${new Date().getFullYear()} OfficeMoM. All rights reserved.
+                </td></tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>`,
     });
 
     res.json({ message: "OTP resent successfully" });
@@ -284,10 +333,13 @@ const sendPasswordResetOtp = async (req, res) => {
       "SELECT id, fullName FROM users WHERE email = ?",
       [email]
     );
+
+    // Check if user exists - return error if not found
     if (rows.length === 0) {
-      return res
-        .status(200)
-        .json({ message: "If the email exists, an OTP has been sent" });
+      return res.status(404).json({
+        success: false,
+        message: "User with this email does not exist"
+      });
     }
 
     const otp = String(crypto.randomInt(100000, 1000000)).padStart(6, "0");
@@ -304,23 +356,45 @@ const sendPasswordResetOtp = async (req, res) => {
       replyTo: process.env.MAIL_USER_NOREPLY_VIEW,
       subject: "Password Reset OTP - OfficeMoM",
       html: `
-        <div style="font-family:Arial,sans-serif">
-          <h2>OfficeMoM Password Reset</h2>
-          <p>Hello${rows[0].fullName ? ` ${rows[0].fullName}` : ""},</p>
-          <p>Use the OTP below to reset your password. It is valid for <b>10 minutes</b>.</p>
-          <div style="margin:20px 0">
-            <span style="display:inline-block;padding:12px 24px;background:#4a90e2;color:#fff;font-size:20px;border-radius:6px;letter-spacing:2px">${otp}</span>
-          </div>
-          <p>If you did not request this, you can ignore this email.</p>
-          <p>— OfficeMoM Team</p>
-        </div>
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8" /><title>OfficeMoM Password Reset</title></head>
+        <body style="margin:0; padding:0; font-family: Arial, sans-serif; background-color:#f5f5f5;">
+          <table align="center" cellpadding="0" cellspacing="0" width="100%" style="padding:20px 0;">
+            <tr><td align="center">
+              <table cellpadding="0" cellspacing="0" width="600" style="background:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 0 10px rgba(0,0,0,0.1);">
+                <tr><td style="background-color:#4a90e2; color:#ffffff; padding:20px; text-align:center; font-size:24px; font-weight:bold;">
+                  OfficeMoM Password Reset
+                </td></tr>
+                <tr><td style="padding:30px; color:#333333; font-size:16px; line-height:1.5;">
+                  <p>Hello ${rows[0].fullName ? ` ${rows[0].fullName}` : ""},</p>
+                  <p>Use the OTP below to reset your password. It is valid for <b>10 minutes</b>:</p>
+                  <p style="text-align:center; margin:30px 0;">
+                    <span style="display:inline-block; padding:15px 30px; font-size:22px; font-weight:bold; color:#ffffff; background-color:#4a90e2; border-radius:6px;">${otp}</span>
+                  </p>
+                  <p style="margin-top:30px;">Best regards,<br/>The OfficeMoM Team</p>
+                </td></tr>
+                <tr><td style="background:#f0f0f0; padding:15px; text-align:center; font-size:12px; color:#777777;">
+                  &copy; ${new Date().getFullYear()} OfficeMoM. All rights reserved.
+                </td></tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
       `,
     });
 
-    return res.status(200).json({ message: "OTP sent if email exists" });
+    return res.status(200).json({
+      success: true,
+      message: "Password reset OTP has been sent to your email"
+    });
   } catch (err) {
     console.error("sendPasswordResetOtp error:", err);
-    return res.status(500).json({ message: "Server error" });
+    return res.status(500).json({
+      success: false,
+      message: "Server error. Please try again later."
+    });
   }
 };
 
@@ -379,6 +453,70 @@ const resetPasswordWithOtp = async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 };
+const resetPasswordWithoutOtp = async (req, res) => {
+  try {
+    const { email, newPassword } = req.body;
+
+    if (!email || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and new password are required"
+      });
+    }
+
+    // Find user
+    const [rows] = await db.query(
+      "SELECT id, password FROM users WHERE email = ?",
+      [email]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    const user = rows[0];
+
+    // Validate that new password is different from current password
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        message: "New password must be different from current password"
+      });
+    }
+
+    // Validate password strength
+    const strongPassword = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(newPassword);
+    if (!strongPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 8 characters long and include uppercase letter, lowercase letter, and a number"
+      });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await db.query(
+      "UPDATE users SET password = ? WHERE email = ?",
+      [hashedPassword, email]
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Password updated successfully"
+    });
+  } catch (err) {
+    console.error("resetPasswordWithoutOtp error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error. Please try again later."
+    });
+  }
+};
 
 module.exports = {
   signup,
@@ -389,4 +527,5 @@ module.exports = {
   uploadProfilePicture,
   sendPasswordResetOtp,
   resetPasswordWithOtp,
+  resetPasswordWithoutOtp
 };

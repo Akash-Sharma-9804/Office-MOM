@@ -37,9 +37,9 @@ const features = [
     icon: (
       <CheckCircle className="w-8 h-8 text-amber-600 dark:text-amber-400" />
     ),
-    title: "Task Tracking",
+    title: "Meeting Bot (Coming Soon)",
     description:
-      "Automatically extract action items and assign tasks to team members.",
+      "Automatically join meetings to take notes and generate minutes for you.",
   },
 ];
 
@@ -48,7 +48,7 @@ const DemoVideo = () => {
     <>
       <Helmet>
         <meta charSet="utf-8" />
-        <title>OfficeMom | Features</title>
+        <title>Smart Minutes of the Meeting (OfficeMoM) | Features</title>
         <link rel="canonical" href="https://officemom.me/features" />
       </Helmet>
       <section className="relative h-full min-h-screen md:w-full w-screen dark:bg-[linear-gradient(90deg,#06080D_0%,#0D121C_100%)] bg-[linear-gradient(180deg,white_0%,#d3e4f0_100%)] pt-20">

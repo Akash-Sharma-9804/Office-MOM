@@ -2,88 +2,48 @@
 import { motion } from "framer-motion";
 import axios from "axios";
 import { useEffect, useState } from "react";
-import { X, Check, Star, Zap, Shield, Users, Brain } from "lucide-react";
+import { X, Check, Star, Zap, Shield, Users, Brain, Globe } from "lucide-react";
 import { useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "../ToastContext";
 import PlanComparison from "./PlanComparison";
-
-const paymentOptions = [
-  {
-    value: "card",
-    label: "Credit Card",
-    icon: "💳",
-    description: "Visa, Mastercard, American Express",
-    disabled: false,
-  },
-  {
-    value: "paypal",
-    label: "PayPal",
-    icon: "🔵",
-    description: "Pay with PayPal account",
-    disabled: true,
-  },
-  {
-    value: "alipay",
-    label: "Alipay",
-    icon: "🟦",
-    description: "Pay with Alipay",
-    disabled: true,
-  },
-  {
-    value: "wechat_pay",
-    label: "WeChat Pay",
-    icon: "💚",
-    description: "WeChat payment",
-    disabled: true,
-  },
-];
-
-const SkeletonItem = () => (
-  <div className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-lg p-3 shadow-sm border border-transparent">
-    <div className="flex justify-between items-center">
-      <div className="flex gap-2 justify-start items-center flex-1 min-w-0">
-        <div className="w-7 h-7 bg-gray-200 dark:bg-gray-600 rounded-md animate-pulse"></div>
-        <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-3/4 animate-pulse"></div>
-      </div>
-      <div className="w-6 h-6 bg-gray-200 dark:bg-gray-600 rounded-full animate-pulse"></div>
-    </div>
-    <div className="ml-8 mt-2 flex justify-between items-center">
-      <div className="h-3 bg-gray-200 dark:bg-gray-600 rounded w-32 animate-pulse"></div>
-      <div className="h-5 bg-gray-200 dark:bg-gray-600 rounded-full w-16 animate-pulse"></div>
-    </div>
-  </div>
-);
+import CheckoutModal from "./CheckoutModal";
+import SkeletonItem from "./SkeletonItem";
 
 const PricingOptions = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState("card");
   const [billingCycle, setBillingCycle] = useState("monthly");
+  const [currency, setCurrency] = useState("local"); // 'USD' or 'local'
   const { token } = useSelector((state) => state.auth);
   const nav = useNavigate();
   const { addToast } = useToast();
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingCheckout, setLoadingCheckout] = useState(false);
   const [error, setError] = useState(null);
+  const [subscription, setSubscription] = useState(null);
+  const [location, setLocation] = useState(null);
+  const [exchangeRate, setExchangeRate] = useState(null);
+  const [localCurrency, setLocalCurrency] = useState("USD");
 
   const fetchPlans = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
-      setError(null);
       const response = await axios.get(
-        `${import.meta.env.VITE_BACKEND_URL}/api/plans`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
+        `${import.meta.env.VITE_BACKEND_URL}/api/plans`
       );
-      if (response.data.success) {
-        setPlans(response.data.data);
+
+      if (response?.data?.success) {
+        setPlans(response?.data?.data);
       } else {
-        setError(response.data.message);
+        setError(response?.data?.message || "Failed to fetch plans");
       }
     } catch (err) {
-      setError(err.message);
+      console.error("Fetch plans error: ", err);
+      setError(err.response?.data?.message || err.message || "Network error");
     } finally {
       setLoading(false);
     }
@@ -91,6 +51,73 @@ const PricingOptions = () => {
 
   useEffect(() => {
     fetchPlans();
+  }, []);
+
+  useEffect(() => {
+    if (token) {
+      const fetchSubscription = async () => {
+        try {
+          const res = await axios.get(
+            `${import.meta.env.VITE_BACKEND_URL}/api/subscription`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            }
+          );
+          setSubscription(res.data.data);
+        } catch (err) {
+          console.error("Failed to load subscription details.", err);
+        }
+      };
+
+      fetchSubscription();
+    }
+  }, [token]);
+
+  useEffect(() => {
+    const fetchLocation = async (lat, lon) => {
+      try {
+        const url =
+          lat && lon
+            ? `${import.meta.env.VITE_BACKEND_URL
+            }/api/location?lat=${lat}&lon=${lon}&includeRates=true`
+            : `/api/location?includeRates=true`;
+
+        const res = await axios.get(url);
+        const locationData = res.data.data;
+        setLocation(locationData);
+        // Set local currency based on location
+        if (locationData?.currency) {
+          setLocalCurrency(locationData.currency);
+        }
+
+        // Use exchange rates from API response
+        if (res.data.exchangeRates) {
+          setExchangeRate(res.data.exchangeRates[locationData.currency] || 1);
+        }
+      } catch (err) {
+        console.error("Failed to fetch location:", err);
+      }
+    };
+
+    // Try browser geolocation first
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          fetchLocation(position.coords.latitude, position.coords.longitude);
+        },
+        (error) => {
+          console.warn(
+            "Geolocation failed, falling back to IP:",
+            error.message
+          );
+          fetchLocation();
+        }
+      );
+    } else {
+      fetchLocation();
+    }
   }, []);
 
   const getPlanIcon = (planName) => {
@@ -118,8 +145,10 @@ const PricingOptions = () => {
   };
 
   const handleCheckout = async () => {
+    setLoadingCheckout(true);
     if (!paymentMethod) {
       addToast("error", "Please select a payment method");
+      setLoadingCheckout(false);
       return;
     }
 
@@ -129,16 +158,27 @@ const PricingOptions = () => {
           ? selectedPlan.yearlyPrice
           : selectedPlan.price;
 
+      // Get the correct priceID based on billing cycle
+      const priceID =
+        billingCycle === "yearly"
+          ? selectedPlan.yearly_priceID
+          : selectedPlan.priceID;
+
+      const requestData = {
+        plan: selectedPlan.name,
+        paymentMethods: [paymentMethod],
+        billingCycle,
+        price: finalPrice,
+      };
+
+      if (priceID) {
+        requestData.priceID = priceID;
+      }
+
       const res = await axios.post(
-        `${
-          import.meta.env.VITE_BACKEND_URL
+        `${import.meta.env.VITE_BACKEND_URL
         }/api/stripe/create-checkout-session`,
-        {
-          plan: selectedPlan.name,
-          paymentMethods: [paymentMethod],
-          billingCycle,
-          price: finalPrice,
-        },
+        requestData,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -147,9 +187,11 @@ const PricingOptions = () => {
       );
 
       if (res.data.url) {
+        setLoadingCheckout(false);
         window.location.href = res.data.url;
       }
     } catch (err) {
+      setLoadingCheckout(false);
       console.error("Checkout error:", err);
       addToast("error", "Failed to process checkout. Please try again.");
     }
@@ -159,11 +201,67 @@ const PricingOptions = () => {
     return (monthlyPrice * 12 - monthlyPrice * 12 * 0.9).toFixed(0);
   };
 
+  // Format price with English numerals
+  const formatPrice = (price) => {
+    if (currency === "USD" || !exchangeRate) {
+      return {
+        amount: price,
+        formatted: `$${price}`,
+        currency: "USD"
+      };
+    }
+
+    const localPrice = price * exchangeRate;
+
+    // Always use 'en' locale for English numerals, but keep the currency
+    try {
+      const formatted = new Intl.NumberFormat('en', {
+        style: 'currency',
+        currency: localCurrency,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      }).format(localPrice);
+
+      return {
+        amount: localPrice,
+        formatted,
+        currency: localCurrency
+      };
+    } catch (error) {
+      // Fallback to USD
+      return {
+        amount: price,
+        formatted: `$${price}`,
+        currency: "USD"
+      };
+    }
+  };
+
+  // Format savings with English numerals
+  const formatSavings = (savings) => {
+    if (currency === "USD" || !exchangeRate) {
+      return `$${savings}`;
+    }
+
+    const localSavings = savings * exchangeRate;
+
+    try {
+      return new Intl.NumberFormat('en', {
+        style: 'currency',
+        currency: localCurrency,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(localSavings);
+    } catch (error) {
+      return `$${savings}`;
+    }
+  };
+
   if (loading) {
     return (
-      <div>
+      <div className=" text-center dark:text-gray-100">
         <div className="flex justify-center items-center h-screen">
-          <div className="animate-spin w-16 h-16 text-gray-500"></div>
+          <div className="animate-spin w-16 h-16 text-gray-500 dark:text-gray-100"></div>
         </div>
         Loading...
       </div>
@@ -171,7 +269,7 @@ const PricingOptions = () => {
   }
   if (error) {
     return (
-      <div>
+      <div className=" text-center dark:text-gray-100">
         <div className="flex justify-center items-center h-screen">
           <div className="animate-spin w-16 h-16 text-red-500"></div>
         </div>
@@ -199,30 +297,60 @@ const PricingOptions = () => {
             </p>
 
             {/* Billing Toggle - Top */}
-            <div className="flex justify-center">
-              <div className="bg-white dark:bg-gray-800 rounded-2xl p-2 shadow-lg border border-gray-200 dark:border-gray-700">
-                <div className="flex bg-gray-100 dark:bg-gray-700/50 rounded-xl p-1">
-                  {[
-                    { value: "monthly", label: "Monthly" },
-                    { value: "yearly", label: "Yearly" },
-                  ].map((option) => (
-                    <button
-                      key={option.value}
-                      onClick={() => setBillingCycle(option.value)}
-                      className={`flex cursor-pointer items-center gap-2 px-6 py-3 rounded-lg font-semibold transition-all duration-200 ${
-                        billingCycle === option.value
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4 md:mb-8 mb-4">
+              <div className="flex justify-center">
+                <div className="bg-white dark:bg-gray-800 rounded-2xl p-2 shadow-lg border border-gray-200 dark:border-gray-700">
+                  <div className="flex bg-gray-100 dark:bg-gray-700/50 rounded-xl p-1">
+                    {[
+                      { value: "monthly", label: "Monthly" },
+                      { value: "yearly", label: "Yearly" },
+                    ].map((option) => (
+                      <button
+                        key={option.value}
+                        onClick={() => setBillingCycle(option.value)}
+                        className={`flex cursor-pointer items-center gap-2 px-6 py-3 rounded-lg font-semibold transition-all duration-200 ${billingCycle === option.value
                           ? "bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm"
                           : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
-                      }`}
-                    >
-                      {option.label}
-                      {option.value === "yearly" && (
-                        <span className="bg-gradient-to-r from-green-500 to-emerald-500 text-white text-xs px-2 py-1 rounded-full font-medium">
-                          Save 10%
-                        </span>
-                      )}
-                    </button>
-                  ))}
+                          }`}
+                      >
+                        {option.label}
+                        {option.value === "yearly" && (
+                          <span className="bg-gradient-to-r from-green-500 to-emerald-500 text-white text-xs px-2 py-1 rounded-full font-medium">
+                            Save 10%
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Currency Toggle */}
+              <div className="flex justify-center">
+                <div className="bg-white dark:bg-gray-800 rounded-2xl p-2 shadow-lg border border-gray-200 dark:border-gray-700">
+                  <div className="flex bg-gray-100 dark:bg-gray-700/50 rounded-xl p-1">
+                    {[
+                      { value: "USD", label: "USD", icon: "$" },
+                      { value: "local", label: localCurrency, icon: <Globe size={16} /> },
+                    ].map((option) => (
+                      <button
+                        key={option.value}
+                        onClick={() => setCurrency(option.value)}
+                        className={`flex cursor-pointer items-center gap-2 px-6 py-3 rounded-lg font-semibold transition-all duration-200 ${currency === option.value
+                          ? "bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm"
+                          : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                          }`}
+                      >
+                        {option.icon}
+                        {option.label}
+                        {option.value === "local" && location?.country && (
+                          <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded-full">
+                            {location.country}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -233,32 +361,32 @@ const PricingOptions = () => {
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 max-w-7xl mx-auto">
           {loading
             ? Array.from({ length: 5 }).map((_, index) => (
-                <SkeletonItem key={index} />
-              ))
-            : plans.map((plan, index) => {
+              <SkeletonItem key={index} />
+            ))
+            : plans && plans.length > 0
+              ? plans.map((plan, index) => {
+                if (!plan?.name) return null;
                 const IconComponent = getPlanIcon(plan.name);
                 const displayPrice =
                   billingCycle === "yearly" ? plan.yearlyPrice : plan.price;
                 const originalYearlyPrice = plan.price * 12;
 
+                const formattedPrice = formatPrice(displayPrice);
+                const formattedYearlyPrice = formatPrice(originalYearlyPrice);
+                const formattedSavings = formatSavings(calculateYearlySavings(plan.price));
+
                 return (
                   <motion.div
                     key={plan.id}
-                    initial={{ opacity: 0, y: 40 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5, delay: index * 0.1 }}
-                    viewport={{ once: true }}
-                    className={`relative rounded-2xl p-4 flex flex-col h-full transition-all duration-300 ${
-                      plan.isHighlighted
-                        ? "bg-gradient-to-br dark:from-indigo-600/30 dark:to-purple-600/30 from-indigo-600 to-purple-600 text-white shadow-2xl shadow-indigo-500/25 transform scale-105 border-2 border-indigo-500"
-                        : "bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-lg hover:shadow-xl border border-gray-200 dark:border-gray-700"
-                    }`}
+                    className={`relative rounded-2xl p-4 flex flex-col h-full transition-all duration-300 ${plan.isHighlighted
+                      ? "bg-gradient-to-br dark:from-indigo-600/30 dark:to-purple-600/30 from-indigo-600 to-purple-600 text-white shadow-2xl shadow-indigo-500/25 transform lg:scale-105 border-2 border-indigo-500 "
+                      : "bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-lg hover:shadow-xl border border-gray-200 dark:border-gray-700"
+                      }`}
                   >
                     {/* Popular Badge */}
                     {plan.isPopular === 1 && (
                       <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
                         <div className=" text-xs bg-gradient-to-r from-amber-400 to-amber-500 text-white px-4 py-1.5 rounded-full font-medium flex items-center gap-1 shadow-lg">
-                          {/* <Star size={14} /> */}
                           Most Popular
                         </div>
                       </div>
@@ -267,11 +395,10 @@ const PricingOptions = () => {
                     {/* Plan Icon */}
                     {IconComponent && (
                       <div
-                        className={`mb-6 p-3 rounded-xl w-fit ${
-                          plan.isHighlighted
-                            ? "bg-white/20"
-                            : "bg-indigo-100 dark:bg-indigo-900/30"
-                        }`}
+                        className={`mb-6 p-3 rounded-xl w-fit ${plan.isHighlighted
+                          ? "bg-white/20"
+                          : "bg-indigo-100 dark:bg-indigo-900/30"
+                          }`}
                       >
                         <IconComponent
                           size={24}
@@ -287,20 +414,18 @@ const PricingOptions = () => {
                     {/* Plan Header */}
                     <div className="mb-6">
                       <h3
-                        className={`text-2xl font-bold mb-2 ${
-                          plan.isHighlighted
-                            ? "text-white"
-                            : "text-gray-900 dark:text-white"
-                        }`}
+                        className={`text-2xl font-bold mb-2 ${plan.isHighlighted
+                          ? "text-white"
+                          : "text-gray-900 dark:text-white"
+                          }`}
                       >
                         {plan.name}
                       </h3>
                       <p
-                        className={`text-sm leading-relaxed ${
-                          plan.isHighlighted
-                            ? "text-indigo-100"
-                            : "text-gray-600 dark:text-gray-400"
-                        }`}
+                        className={`text-sm leading-relaxed ${plan.isHighlighted
+                          ? "text-indigo-100"
+                          : "text-gray-600 dark:text-gray-400"
+                          }`}
                       >
                         {plan.description}
                       </p>
@@ -310,20 +435,18 @@ const PricingOptions = () => {
                     <div className="mb-6">
                       <div className="flex items-baseline gap-2">
                         <span
-                          className={`text-4xl font-bold ${
-                            plan.isHighlighted
-                              ? "text-white"
-                              : "text-gray-900 dark:text-white"
-                          }`}
+                          className={`text-3xl font-bold ${plan.isHighlighted
+                            ? "text-white"
+                            : "text-gray-900 dark:text-white"
+                            }`}
                         >
-                          ${displayPrice}
+                          {formattedPrice.formatted}
                         </span>
                         <span
-                          className={`text-lg ${
-                            plan.isHighlighted
-                              ? "text-indigo-100"
-                              : "text-gray-500 dark:text-gray-400"
-                          }`}
+                          className={`text-lg ${plan.isHighlighted
+                            ? "text-indigo-100"
+                            : "text-gray-500 dark:text-gray-400"
+                            }`}
                         >
                           {billingCycle === "yearly" ? "/year" : "/month"}
                         </span>
@@ -332,25 +455,13 @@ const PricingOptions = () => {
                       {plan.price > 0 && billingCycle === "yearly" && (
                         <div className="mt-2 space-y-1">
                           <div className="text-sm text-gray-500 dark:text-gray-400 line-through">
-                            ${originalYearlyPrice}/year
+                            {formattedYearlyPrice.formatted}/year
                           </div>
-                          <div className="text-sm text-green-600 dark:text-green-400 font-medium">
-                            Save ${calculateYearlySavings(plan.price)} per year
+                          <div className={`text-sm font-medium ${plan.isHighlighted ? "text-green-100" : "text-green-500"}`}>
+                            Save {formattedSavings} per year
                           </div>
                         </div>
                       )}
-
-                      {/* {plan.price > 0 && billingCycle === "monthly" && (
-                        <p
-                          className={`text-sm mt-1 ${
-                            plan.isHighlighted
-                              ? "text-indigo-100"
-                              : "text-gray-500 dark:text-gray-400"
-                          }`}
-                        >
-                          ${plan.yearlyPrice}/year with yearly plan
-                        </p>
-                      )} */}
                     </div>
 
                     {/* Features List */}
@@ -360,18 +471,16 @@ const PricingOptions = () => {
                           <li key={i} className="flex items-start gap-3">
                             <Check
                               size={18}
-                              className={`flex-shrink-0 mt-0.5 ${
-                                plan.isHighlighted
-                                  ? "text-green-300"
-                                  : "text-green-500"
-                              }`}
+                              className={`flex-shrink-0 mt-0.5 ${plan.isHighlighted
+                                ? "text-green-300"
+                                : "text-green-500"
+                                }`}
                             />
                             <span
-                              className={`text-sm ${
-                                plan.isHighlighted
-                                  ? "text-indigo-100"
-                                  : "text-gray-600 dark:text-gray-300"
-                              }`}
+                              className={`text-sm ${plan.isHighlighted
+                                ? "text-indigo-100"
+                                : "text-gray-600 dark:text-gray-300"
+                                }`}
                             >
                               {feature}
                             </span>
@@ -382,17 +491,19 @@ const PricingOptions = () => {
                     {/* CTA Button */}
                     <button
                       onClick={() => handleOpenModal(plan)}
-                      className={`w-full cursor-pointer py-3.5 px-6 rounded-xl font-semibold transition-all duration-200 ${
-                        plan.isHighlighted
-                          ? "bg-white text-indigo-600 hover:bg-gray-50 hover:shadow-lg transform hover:-translate-y-0.5"
-                          : "bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-lg transform hover:-translate-y-0.5"
-                      }`}
+                      className={`w-full disabled:cursor-not-allowed cursor-pointer py-3.5 px-6 rounded-xl font-semibold transition-all duration-200 ${plan.isHighlighted
+                        ? "bg-white text-indigo-600 hover:bg-gray-50 hover:shadow-lg transform hover:-translate-y-0.5"
+                        : "bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-lg transform hover:-translate-y-0.5"
+                        }`}
                     >
-                      {plan.buttonText}
+                      {subscription?.plan_name === plan.name ? "Subscribed" : plan.buttonText}
                     </button>
                   </motion.div>
                 );
-              })}
+              })
+              : Array.from({ length: 5 }).map((_, index) => (
+                <SkeletonItem key={index} />
+              ))}
         </div>
 
         {/* Trust Indicators */}
@@ -421,86 +532,27 @@ const PricingOptions = () => {
 
       {/* Payment Modal */}
       {isModalOpen && selectedPlan && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 px-4 py-8">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            className="bg-white max-h-[90vh]  dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 relative"
-          >
-            {/* Close Button */}
-            <button
-              onClick={() => setIsModalOpen(false)}
-              className="absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
-            >
-              <X size={20} />
-            </button>
-
-            {/* Modal Header */}
-            <div className="mb-6">
-              <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                Complete Your Purchase
-              </h3>
-              <p className="text-gray-600 dark:text-gray-400">
-                Choose Payment Options
-              </p>
-            </div>
-
-            {/* Payment Methods */}
-            <div className="space-y-3 mb-6 max-h-60 overflow-y-auto">
-              {paymentOptions.map((option) => (
-                <div
-                  key={option.value}
-                  onClick={() =>
-                    !option.disabled && setPaymentMethod(option.value)
-                  }
-                  className={`flex items-center gap-3 p-3 rounded-lg border transition-all cursor-pointer ${
-                    option.disabled
-                      ? "opacity-50 cursor-not-allowed grayscale"
-                      : "hover:border-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
-                  } ${
-                    paymentMethod === option.value
-                      ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20"
-                      : "border-gray-300 dark:border-gray-700"
-                  }`}
-                >
-                  <span className="text-xl">{option.icon}</span>
-                  <div className="flex-1 text-left">
-                    <div className="font-medium text-gray-900 dark:text-white">
-                      {option.label}
-                    </div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">
-                      {option.description}
-                    </div>
-                  </div>
-                  {paymentMethod === option.value && (
-                    <Check
-                      size={16}
-                      className="text-indigo-600 flex-shrink-0"
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* Checkout Button */}
-            <button
-              onClick={handleCheckout}
-              disabled={!paymentMethod}
-              className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
-            >
-              Proceed to Checkout
-            </button>
-
-            {/* Security Notice */}
-            <p className="text-xs text-center text-gray-500 dark:text-gray-400 mt-4">
-              🔒 Secure payment processed by Stripe. Your data is protected.
-            </p>
-          </motion.div>
-        </div>
+        <CheckoutModal
+          selectedPlan={selectedPlan}
+          setIsModalOpen={setIsModalOpen}
+          paymentMethod={paymentMethod}
+          setPaymentMethod={setPaymentMethod}
+          loadingCheckout={loadingCheckout}
+          handleCheckout={handleCheckout}
+          billingCycle={billingCycle}
+          currency={currency}
+          exchangeRate={exchangeRate}
+          localCurrency={localCurrency}
+        />
       )}
 
-      <PlanComparison plans={plans} billingCycle={billingCycle} />
+      <PlanComparison
+        plans={plans}
+        billingCycle={billingCycle}
+        currency={currency}
+        exchangeRate={exchangeRate}
+        localCurrency={localCurrency}
+      />
     </div>
   );
 };

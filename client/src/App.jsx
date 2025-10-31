@@ -23,6 +23,9 @@ import Documentation from "./pages/Documentation/Documentation";
 import Success from "./pages/PaymentResult/Success";
 import Failure from "./pages/PaymentResult/Failure";
 import OAuthSuccess from "./pages/OAuthSuccess";
+import Subscription from './pages/PaymentResult/Subscription';
+import BotMaster from "./pages/BotMaster/BotMaster";
+import SupportedLanguages from "./pages/SupportedLanguages/SupportedLanguages";
 
 function App() {
   return (
@@ -46,6 +49,15 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/bot-master"
+            element={
+              <ProtectedRoute>
+                <BotMaster />
+              </ProtectedRoute>
+            }
+          />
+          
           <Route path="/join-meeting/:id" element={<JoinMeeting />} />
           <Route
             path="/audio-notes"
@@ -71,6 +83,14 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/subscription"
+            element={
+              <ProtectedRoute>
+                <Subscription/>
+              </ProtectedRoute>
+            }
+          />
           <Route path="/about-us" element={<AboutUs />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/contact-us" element={<ContactPage />} />
@@ -79,6 +99,7 @@ function App() {
           <Route path="/privacy-policy" element={<PrivacyPolicy />} />
           <Route path="/terms-of-service" element={<TermsOfService/>} />
           <Route path="/documentation" element={<Documentation />} />
+          <Route path="/supported-language" element={<SupportedLanguages/>} />
           <Route
             path="/success"
             element={

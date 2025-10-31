@@ -57,7 +57,7 @@ const MeetingHistory = () => {
     <>
       <Helmet>
         <meta charSet="utf-8" />
-        <title>OfficeMom | MeetingHistory</title>
+        <title>Smart Minutes of the Meeting (OfficeMoM) | MeetingHistory</title>
         <link rel="canonical" href="https://officemom.me/momGenerate/" />
       </Helmet>
       <section className="relative min-h-screen w-full overflow-hidden">
@@ -76,7 +76,7 @@ const MeetingHistory = () => {
           </div>
         </div>
         <div className="relative z-20 max-h-screen overflow-hidden overflow-y-scroll ">
-          <div className=" min-h-screen flex justify-center items-center md:py-4 py-10 ">
+          <div className=" min-h-screen flex justify-center items-center md:py-4 py-10 px-4">
             {error ? (
               <NoPage />
             ) : (
